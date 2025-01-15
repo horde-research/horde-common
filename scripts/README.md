@@ -6,7 +6,7 @@ This repository contains a script to evaluate Hugging Face models on multiple-ch
 
 To execute the script, use the following command:
 ```bash
-$ python test_script.py --model_id Qwen/Qwen2.5-7B-Instruct --output_path .
+$ python mc-eval-simplified-inference.py --model_id Qwen/Qwen2.5-7B-Instruct --output_path .
 ```
 
 ### Parameters:
