@@ -24,6 +24,10 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from langchain.prompts import PromptTemplate
 
+
+with open('format_file.json', 'r') as f:
+    original_submit = json.load(f)
+
 def load_and_prepare_datasets() -> Dict[str, Any]:
     """
     Load and prepare datasets for processing.
@@ -216,8 +220,32 @@ def save_results(answers_mmlu: pd.DataFrame, answers_ent: pd.DataFrame, model_id
     final['acc'] = final['sum'] / final['count']
 
     name = "_".join(model_id.split("/"))
-    final.to_csv(os.path.join(output_path, f"final-{name}.csv"))
-    df.to_csv(os.path.join(output_path, f"df-{name}.csv"))
+    
+    final_stats_path = os.path.join(output_path, f"final-{name}.csv")
+    final.to_csv(final_stats)
+
+    metrics_path = os.path.join(output_path, f"df-{name}.csv")
+    df.to_csv(metrics_path)
+
+    model_name = final_stats_path.split('final-')[-1].split('.csv')[0].replace('_', '/')
+    model_name_sanitized = model_name.replace('/', '__')
+    final = final.iloc[:-1,:]
+    final['dataset'] = new_datasets_naming
+
+    updated_bench = dict()
+    for _, row in final.iterrows():
+        updated_bench[row.dataset] = {
+            'acc,none': row.acc,
+            'acc_stderr,none': 0.0,
+            'alias': row.dataset
+        }
+
+    original_submit['results'] = updated_bench
+    original_submit['model_name'] = model_name
+    original_submit['model_name_sanitized'] = model_name_sanitized
+
+    with open(f'{model_name_sanitized}.json', 'w') as f:
+        json.dump(original_submit, f)
 
 def main(model_id: str, output_path: str) -> None:
     """
