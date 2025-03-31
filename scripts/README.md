@@ -28,6 +28,24 @@ This script is designed to work in the **kaz-llm-eval-lb** environment. However,
 !pip install sentencepiece # optional, only for some models using older versions of LLaMA
 ```
 
+## Alternative way to set up environment:
+
+```bash
+conda create -n py312 python=3.12
+```
+
+Activate env:
+
+```bash
+conda activate py312
+```
+
+Install required libraries:
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Script Features
 
 - Evaluates models on two types of datasets: **MMLU-like** and **ENT-like**.
