@@ -54,6 +54,7 @@ pip install -r requirements.txt
 - Outputs two CSV files:
   - `final-<model_name>.csv`: Contains aggregated accuracy results per dataset.
   - `df-<model_name>.csv`: Contains detailed prediction results.
+  - `final-<model_name>.json`: Containts submittable json file for the leaderboard
 
 ## Known Weakness
 
