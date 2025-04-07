@@ -159,7 +159,7 @@ def load_and_prepare_datasets() -> Dict[str, Any]:
     }
 
 
-def load_model_and_tokenizer(model_id: str) -> Dict[str, Any]:
+def load_model_and_tokenizer(model_id: str, dtype: str = "float16") -> Dict[str, Any]:
     """
     Load the Hugging Face model and tokenizer.
 
@@ -172,8 +172,17 @@ def load_model_and_tokenizer(model_id: str) -> Dict[str, Any]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True).to(
-        "cuda"
+    dtype_map = {
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "float32": torch.float32
+    }
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        device_map="auto",
+        trust_remote_code=True,
+        torch_dtype=dtype_map[dtype]
     )
     model.eval()
 
@@ -296,7 +305,7 @@ def save_results(
         json.dump(original_submit, f)
 
 
-def main(model_id: str, output_path: str) -> None:
+def main(model_id: str, output_path: str, dtype: str) -> None:
     """
     Main function to load data, model, and process predictions.
 
@@ -305,7 +314,7 @@ def main(model_id: str, output_path: str) -> None:
         output_path (str): Directory to save output CSV files.
     """
     datasets = load_and_prepare_datasets()
-    model_data = load_model_and_tokenizer(model_id)
+    model_data = load_model_and_tokenizer(model_id, dtype=dtype)
 
     answers_mmlu = process_dataset(
         datasets["mmlu_like_ds"],
@@ -336,6 +345,14 @@ if __name__ == "__main__":
         required=True,
         help="Directory to save output CSV files.",
     )
+    parser.add_argument(
+    "--dtype",
+    type=str,
+    default="float32",  
+    choices=["float16", "bfloat16", "float32"],
+    help="Data type for model weights: float16, bfloat16, or float32 (default: float16)."
+    )
     args = parser.parse_args()
 
-    main(model_id=args.model_id, output_path=args.output_path)
+    main(model_id=args.model_id, output_path=args.output_path, dtype=args.dtype)
+
