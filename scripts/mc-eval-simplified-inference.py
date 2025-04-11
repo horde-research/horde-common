@@ -20,10 +20,15 @@ import pandas as pd
 from datasets import Dataset, load_dataset
 from tqdm import tqdm
 import json
+from dotenv import load_dotenv
 import torch
+from huggingface_hub.hf_api import HfFolder
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from langchain.prompts import PromptTemplate
 
+load_dotenv()
+if "HUGGINGFACE_TOKEN" in os.environ:
+    HfFolder.save_token(os.environ["HUGGINGFACE_TOKEN"])
 
 with open("format_file.json", "r") as f:
     original_submit = json.load(f)
@@ -189,7 +194,7 @@ def load_model_and_tokenizer(model_id: str, dtype: str = "float16") -> Dict[str,
     return {"model": model, "tokenizer": tokenizer}
 
 
-def get_ans(model: Any, tokenizer: Any, text: str, mode: str = "mmlu") -> tuple:
+def get_ans(model: Any, tokenizer: Any, text: str, mode: str = "mmlu", apply_chat_template: bool = False) -> tuple:
     """
     Generate an answer for the given text.
 
@@ -202,8 +207,21 @@ def get_ans(model: Any, tokenizer: Any, text: str, mode: str = "mmlu") -> tuple:
     Returns:
         tuple: Predicted answer.
     """
-    inputs = tokenizer(text, return_tensors="pt")
-    inputs = {k: v.cuda() for k, v in inputs.items()}
+    if apply_chat_template:
+        print("we are applying chat template")
+        messages = [{"role": "user", "content": [{"type": "text", "text": text},]}]
+        #inputs = tokenizer.apply_chat_template(messages, add_generation_prompt=True,return_tensors="pt")
+        chat = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+        inputs = tokenizer(chat, return_tensors="pt")
+        # print(f"Type of inputs: {type(inputs)}")
+        # print(f"Inputs: {inputs}")
+
+        # if isinstance(inputs, list):
+        #     inputs = inputs[0]
+        inputs = {k: v.cuda() for k, v in inputs.items()}
+    else:
+        inputs = tokenizer(text, return_tensors="pt")
+        inputs = {k: v.cuda() for k, v in inputs.items()}
 
     with torch.no_grad():
         logits = model(**inputs).logits[0, -1]
@@ -227,7 +245,7 @@ def get_ans(model: Any, tokenizer: Any, text: str, mode: str = "mmlu") -> tuple:
 
 
 def process_dataset(
-    dataset: Dataset, model: Any, tokenizer: Any, mode: str
+    dataset: Dataset, model: Any, tokenizer: Any, mode: str, apply_chat_template: bool = False
 ) -> pd.DataFrame:
     """
     Process a dataset to compute predictions and accuracy.
@@ -243,7 +261,7 @@ def process_dataset(
     """
     results = []
     for data in tqdm(dataset, total=len(dataset)):
-        ans_list = get_ans(model, tokenizer, data["text"], mode=mode)
+        ans_list = get_ans(model, tokenizer, data["text"], mode=mode, apply_chat_template=apply_chat_template)
         predict = ans_list[1]
         answer = data["answer"]
         acc = int(predict == answer)
@@ -305,7 +323,7 @@ def save_results(
         json.dump(original_submit, f)
 
 
-def main(model_id: str, output_path: str, dtype: str) -> None:
+def main(model_id: str, output_path: str, dtype: str, apply_chat_template: bool = False ) -> None:
     """
     Main function to load data, model, and process predictions.
 
@@ -321,6 +339,7 @@ def main(model_id: str, output_path: str, dtype: str) -> None:
         model_data["model"],
         model_data["tokenizer"],
         mode="mmlu",
+        apply_chat_template=apply_chat_template
     )
     answers_ent = process_dataset(
         datasets["ent_ds"], model_data["model"], model_data["tokenizer"], mode="ent"
@@ -352,7 +371,15 @@ if __name__ == "__main__":
     choices=["float16", "bfloat16", "float32"],
     help="Data type for model weights: float16, bfloat16, or float32 (default: float16)."
     )
+    parser.add_argument(
+        "--apply_chat_template",
+        action="store_true",
+        help="Flag to use chat template formatting for instruct models."
+    )
     args = parser.parse_args()
 
-    main(model_id=args.model_id, output_path=args.output_path, dtype=args.dtype)
+    main(model_id=args.model_id,
+          output_path=args.output_path,
+            dtype=args.dtype, 
+             apply_chat_template =args.apply_chat_template )
 
