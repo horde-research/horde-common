@@ -6,29 +6,17 @@ This repository contains a script to evaluate Hugging Face models on multiple-ch
 
 To execute the script, use the following command:
 ```bash
-$ python mc-eval-simplified-inference.py --model_id Qwen/Qwen2.5-7B-Instruct --output_path .
+python mc-eval-simplified-inference.py --model_id meta-llama/Llama-3.3-70B-Instruct --dtype float16 --output_path .
 ```
 
 ### Parameters:
 - `--model_id`: The Hugging Face model ID to use for predictions (e.g., `Qwen/Qwen2.5-7B-Instruct`).
 - `--output_path`: The directory where the results will be saved.
+- `--dtype`: Data type for model weights: float16, bfloat16, or float32 (default: float16).
+- `--apply_chat_template`: Flag to use chat template formatting for instruct models.
 
-## Requirements
 
-This script is designed to work in the **kaz-llm-eval-lb** environment. However, if you are setting up a new environment, you can install the required libraries using the commands below:
-
-```bash
-!pip install -q -U bitsandbytes
-!pip install -q -U git+https://github.com/huggingface/transformers.git
-!pip install -q -U git+https://github.com/huggingface/peft.git
-!pip install -q -U git+https://github.com/huggingface/accelerate.git
-!pip install -q -U langchain
-!pip install -q einops
-!pip install -q datasets
-!pip install sentencepiece # optional, only for some models using older versions of LLaMA
-```
-
-## Alternative way to set up environment:
+## Set up environment:
 
 ```bash
 conda create -n py312 python=3.12
@@ -56,9 +44,6 @@ pip install -r requirements.txt
   - `df-<model_name>.csv`: Contains detailed prediction results.
   - `final-<model_name>.json`: Containts submittable json file for the leaderboard
 
-## Known Weakness
-
-The alignment between template formatting (`template_*`) and the logits computation (`get_ans`) is critical and needs refinement. Current implementation works better than the original `kaz-llm-eval-lb` results, but further optimization is possible.
 
 ## Placeholders for Future Scripts
 
