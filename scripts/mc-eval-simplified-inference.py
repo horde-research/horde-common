@@ -1,5 +1,5 @@
 """
-This script processes multiple-choice datasets (MMLU-like and ENT-like) to evaluate Hugging Face models' performance in predicting correct answers based on formatted prompts. 
+This script processes multiple-choice datasets (MMLU-like and ENT-like) to evaluate Hugging Face models' performance in predicting correct answers based on formatted prompts.
 
 ### Known Weakness:
 The interconnection between the choice formatting in `template_*` and the options list in the `get_ans` function is a critical point that requires attention:
@@ -14,15 +14,51 @@ Future iterations should consider revisiting the choice alignment between templa
 
 import argparse
 import os
-from typing import List, Dict, Any
+from typing import Dict, Any
 
-import numpy as np
 import pandas as pd
 from datasets import Dataset, load_dataset
 from tqdm import tqdm
+import json
+from dotenv import load_dotenv
 import torch
+from huggingface_hub.hf_api import HfFolder
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from langchain.prompts import PromptTemplate
+
+load_dotenv()
+if "HUGGINGFACE_TOKEN" in os.environ:
+    HfFolder.save_token(os.environ["HUGGINGFACE_TOKEN"])
+
+with open("format_file.json", "r") as f:
+    original_submit = json.load(f)
+
+# new_datasets_naming = [
+#     "kk_history_of_kazakhstan_unt_mc",
+#     "kk_biology_unt_mc",
+#     "kk_constitution_mc",
+#     "kk_dastur_mc",
+#     "kk_english_unt_mc",
+#     "kk_geography_unt_mc",
+#     "kk_world_history_unt_mc",
+#     "kazakh_and_literature_unt_mc",
+#     "mmlu_translated_kk",
+#     "kk_human_society_rights_unt_mc",
+# ]
+
+mapping = {
+    "Kazakhstan": "kk_history_of_kazakhstan_unt_mc",
+    "biology": "kk_biology_unt_mc",
+    "const": "kk_constitution_mc",
+    "dastur": "kk_dastur_mc",
+    "english": "kk_english_unt_mc",
+    "geography": "kk_geography_unt_mc",
+    "history": "kk_world_history_unt_mc",
+    "kazakh": "kazakh_and_literature_unt_mc",
+    "mmlu": "mmlu_translated_kk",
+    "right": "kk_human_society_rights_unt_mc",
+}
+
 
 def load_and_prepare_datasets() -> Dict[str, Any]:
     """
@@ -36,7 +72,7 @@ def load_and_prepare_datasets() -> Dict[str, Any]:
     dastur = load_dataset("kz-transformers/kazakh-dastur-mc")["test"]
     ent = load_dataset("kz-transformers/kazakh-unified-national-testing-mc")
 
-    template_mmlu = ("""
+    template_mmlu = """
     Сіз қазақ тілінде жауап беретін білімді, пайдалы көмекшісіз. Қазақстан мәдениеті, ғылым, тарих және басқа да
     салалар бойынша көптаңдаулы сұрақтарға жауап беріңіз. Сұрақты және берілген жауап нұсқаларын мұқият оқып, ең дұрысын
     бір ғана әріппен (A, B, C, т.б.) белгілеңіз.
@@ -47,9 +83,9 @@ def load_and_prepare_datasets() -> Dict[str, Any]:
     C) {c}\n
     D) {d}\n
 
-    Жауап:""")
+    Жауап:"""
 
-    template_ent = ("""
+    template_ent = """
     Сіз қазақ тілінде жауап беретін білімді, пайдалы көмекшісіз. Қазақстан мәдениеті, ғылым, тарих және басқа да
     салалар бойынша көптаңдаулы сұрақтарға жауап беріңіз. Сұрақты және берілген жауап нұсқаларын мұқият оқып, ең дұрысын
     бір ғана әріппен (A, B, C, т.б.) белгілеңіз.
@@ -64,38 +100,43 @@ def load_and_prepare_datasets() -> Dict[str, Any]:
     G) {g}\n
     H) {h}\n
 
-    Жауап:""")
+    Жауап:"""
 
-    prompt_mmlu = PromptTemplate(template=template_mmlu, input_variables=['prompt', 'a', 'b', 'c', 'd'])
-    prompt_ent = PromptTemplate(template=template_ent, input_variables=['prompt', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'])
+    prompt_mmlu = PromptTemplate(
+        template=template_mmlu, input_variables=["prompt", "a", "b", "c", "d"]
+    )
+    prompt_ent = PromptTemplate(
+        template=template_ent,
+        input_variables=["prompt", "a", "b", "c", "d", "e", "f", "g", "h"],
+    )
 
     def format_text_mmlu(example: Dict[str, Any]) -> Dict[str, str]:
         return {
             "text": prompt_mmlu.format(
-                prompt=example['Question'],
-                a=example['Option A'],
-                b=example['Option B'],
-                c=example['Option C'],
-                d=example['Option D']
+                prompt=example["Question"],
+                a=example["Option A"],
+                b=example["Option B"],
+                c=example["Option C"],
+                d=example["Option D"],
             )
         }
 
     def format_text_ent(example: Dict[str, Any]) -> Dict[str, str]:
-        required_keys = ['question', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+        required_keys = ["question", "A", "B", "C", "D", "E", "F", "G", "H"]
         missing_keys = [key for key in required_keys if key not in example]
         if missing_keys:
             raise ValueError(f"Missing keys in example: {missing_keys}")
         return {
             "text": prompt_ent.format(
-                prompt=example.get('question', ''),
-                a=example.get('A', ''),
-                b=example.get('B', ''),
-                c=example.get('C', ''),
-                d=example.get('D', ''),
-                e=example.get('E', ''),
-                f=example.get('F', ''),
-                g=example.get('G', ''),
-                h=example.get('H', '')
+                prompt=example.get("question", ""),
+                a=example.get("A", ""),
+                b=example.get("B", ""),
+                c=example.get("C", ""),
+                d=example.get("D", ""),
+                e=example.get("E", ""),
+                f=example.get("F", ""),
+                g=example.get("G", ""),
+                h=example.get("H", ""),
             )
         }
 
@@ -104,25 +145,26 @@ def load_and_prepare_datasets() -> Dict[str, Any]:
     dastur = dastur.map(format_text_mmlu).to_pandas()
     ent = pd.concat([ent[i].map(format_text_ent).to_pandas() for i in ent])
 
-    ent['idx'] = ent.index.astype(str) + "-" + ent['subject']
-    mmlu['idx'] = mmlu.index.astype(str) + "-mmlu"
-    const['idx'] = const.index.astype(str) + "-const"
-    dastur['idx'] = dastur.index.astype(str) + "-dastur"
+    ent["idx"] = ent.index.astype(str) + "-" + ent["subject"]
+    mmlu["idx"] = mmlu.index.astype(str) + "-mmlu"
+    const["idx"] = const.index.astype(str) + "-const"
+    dastur["idx"] = dastur.index.astype(str) + "-dastur"
 
-    ent = ent.rename({'correct_answer': 'answer'}, axis=1)
-    mmlu = mmlu.rename({'Correct Answer': 'answer'}, axis=1)
-    const = const.rename({'Correct Answer': 'answer'}, axis=1)
-    dastur = dastur.rename({'Correct Answer': 'answer'}, axis=1)
+    ent = ent.rename({"correct_answer": "answer"}, axis=1)
+    mmlu = mmlu.rename({"Correct Answer": "answer"}, axis=1)
+    const = const.rename({"Correct Answer": "answer"}, axis=1)
+    dastur = dastur.rename({"Correct Answer": "answer"}, axis=1)
 
     columns = ["answer", "text", "idx"]
     mmlu_like = pd.concat([mmlu[columns], const[columns], dastur[columns]])
 
     return {
         "ent_ds": Dataset.from_pandas(ent[columns]),
-        "mmlu_like_ds": Dataset.from_pandas(mmlu_like)
+        "mmlu_like_ds": Dataset.from_pandas(mmlu_like),
     }
 
-def load_model_and_tokenizer(model_id: str) -> Dict[str, Any]:
+
+def load_model_and_tokenizer(model_id: str, dtype: str = "float16") -> Dict[str, Any]:
     """
     Load the Hugging Face model and tokenizer.
 
@@ -135,12 +177,24 @@ def load_model_and_tokenizer(model_id: str) -> Dict[str, Any]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True).to('cuda')
+    dtype_map = {
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "float32": torch.float32
+    }
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        device_map="auto",
+        trust_remote_code=True,
+        torch_dtype=dtype_map[dtype]
+    )
     model.eval()
 
     return {"model": model, "tokenizer": tokenizer}
 
-def get_ans(model: Any, tokenizer: Any, text: str, mode: str = "mmlu") -> tuple:
+
+def get_ans(model: Any, tokenizer: Any, text: str, mode: str = "mmlu", apply_chat_template: bool = False) -> tuple:
     """
     Generate an answer for the given text.
 
@@ -153,30 +207,46 @@ def get_ans(model: Any, tokenizer: Any, text: str, mode: str = "mmlu") -> tuple:
     Returns:
         tuple: Predicted answer.
     """
-    inputs = tokenizer(text, return_tensors='pt')
-    inputs = {k: v.cuda() for k, v in inputs.items()}
+    if apply_chat_template:
+        print("we are applying chat template")
+        messages = [{"role": "user", "content": [{"type": "text", "text": text},]}]
+        #inputs = tokenizer.apply_chat_template(messages, add_generation_prompt=True,return_tensors="pt")
+        chat = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+        inputs = tokenizer(chat, return_tensors="pt")
+        # print(f"Type of inputs: {type(inputs)}")
+        # print(f"Inputs: {inputs}")
+
+        # if isinstance(inputs, list):
+        #     inputs = inputs[0]
+        inputs = {k: v.cuda() for k, v in inputs.items()}
+    else:
+        inputs = tokenizer(text, return_tensors="pt")
+        inputs = {k: v.cuda() for k, v in inputs.items()}
 
     with torch.no_grad():
         logits = model(**inputs).logits[0, -1]
 
     options_list = [
-        (logits[tokenizer(' A').input_ids[-1]], 'A'),
-        (logits[tokenizer(' B').input_ids[-1]], 'B'),
-        (logits[tokenizer(' C').input_ids[-1]], 'C'),
-        (logits[tokenizer(' D').input_ids[-1]], 'D')
+        (logits[tokenizer(" A").input_ids[-1]], "A"),
+        (logits[tokenizer(" B").input_ids[-1]], "B"),
+        (logits[tokenizer(" C").input_ids[-1]], "C"),
+        (logits[tokenizer(" D").input_ids[-1]], "D"),
     ]
 
     if mode == "ent":
         options_list += [
-            (logits[tokenizer(' E').input_ids[-1]], 'E'),
-            (logits[tokenizer(' F').input_ids[-1]], 'F'),
-            (logits[tokenizer(' G').input_ids[-1]], 'G'),
-            (logits[tokenizer(' H').input_ids[-1]], 'H')
+            (logits[tokenizer(" E").input_ids[-1]], "E"),
+            (logits[tokenizer(" F").input_ids[-1]], "F"),
+            (logits[tokenizer(" G").input_ids[-1]], "G"),
+            (logits[tokenizer(" H").input_ids[-1]], "H"),
         ]
 
     return max(options_list, key=lambda x: x[0])
 
-def process_dataset(dataset: Dataset, model: Any, tokenizer: Any, mode: str) -> pd.DataFrame:
+
+def process_dataset(
+    dataset: Dataset, model: Any, tokenizer: Any, mode: str, apply_chat_template: bool = False
+) -> pd.DataFrame:
     """
     Process a dataset to compute predictions and accuracy.
 
@@ -191,15 +261,21 @@ def process_dataset(dataset: Dataset, model: Any, tokenizer: Any, mode: str) -> 
     """
     results = []
     for data in tqdm(dataset, total=len(dataset)):
-        ans_list = get_ans(model, tokenizer, data['text'], mode=mode)
+        ans_list = get_ans(model, tokenizer, data["text"], mode=mode, apply_chat_template=apply_chat_template)
         predict = ans_list[1]
-        answer = data['answer']
+        answer = data["answer"]
         acc = int(predict == answer)
-        idx = data['idx']
-        results.append({'idx': idx, 'answer': answer, 'predict': predict, 'acc': acc})
+        idx = data["idx"]
+        results.append({"idx": idx, "answer": answer, "predict": predict, "acc": acc})
     return pd.DataFrame(results)
 
-def save_results(answers_mmlu: pd.DataFrame, answers_ent: pd.DataFrame, model_id: str, output_path: str) -> None:
+
+def save_results(
+    answers_mmlu: pd.DataFrame,
+    answers_ent: pd.DataFrame,
+    model_id: str,
+    output_path: str,
+) -> None:
     """
     Save results to CSV files.
 
@@ -210,16 +286,44 @@ def save_results(answers_mmlu: pd.DataFrame, answers_ent: pd.DataFrame, model_id
         output_path (str): Directory to save output files.
     """
     df = pd.concat((answers_mmlu, answers_ent))
-    df['dataset'] = df.idx.apply(lambda x: x.split('-')[-1])
+    df["dataset"] = df.idx.apply(lambda x: x.split("-")[-1])
 
-    final = df.groupby('dataset').acc.agg(['sum', 'count'])
-    final['acc'] = final['sum'] / final['count']
+    final = df.groupby("dataset").acc.agg(["sum", "count"])
+    final["acc"] = final["sum"] / final["count"]
 
     name = "_".join(model_id.split("/"))
-    final.to_csv(os.path.join(output_path, f"final-{name}.csv"))
-    df.to_csv(os.path.join(output_path, f"df-{name}.csv"))
 
-def main(model_id: str, output_path: str) -> None:
+    final_stats_path = os.path.join(output_path, f"final-{name}.csv")
+    final.to_csv(final_stats_path)
+
+    metrics_path = os.path.join(output_path, f"df-{name}.csv")
+    df.to_csv(metrics_path)
+
+    model_name = final_stats_path.split("final-")[-1].split(".csv")[0].replace("_", "/")
+    model_name_sanitized = model_name.replace("/", "__")
+    
+
+    final = final[final.index.isin(mapping.keys())]
+    final["dataset"] = final.index.map(mapping)
+
+
+    updated_bench = dict()
+    for _, row in final.iterrows():
+        updated_bench[row.dataset] = {
+            "acc,none": row.acc,
+            "acc_stderr,none": 0.0,
+            "alias": row.dataset,
+        }
+
+    original_submit["results"] = updated_bench
+    original_submit["model_name"] = model_name
+    original_submit["model_name_sanitized"] = model_name_sanitized
+
+    with open(f"{model_name_sanitized}.json", "w") as f:
+        json.dump(original_submit, f)
+
+
+def main(model_id: str, output_path: str, dtype: str, apply_chat_template: bool = False ) -> None:
     """
     Main function to load data, model, and process predictions.
 
@@ -228,17 +332,54 @@ def main(model_id: str, output_path: str) -> None:
         output_path (str): Directory to save output CSV files.
     """
     datasets = load_and_prepare_datasets()
-    model_data = load_model_and_tokenizer(model_id)
+    model_data = load_model_and_tokenizer(model_id, dtype=dtype)
 
-    answers_mmlu = process_dataset(datasets["mmlu_like_ds"], model_data["model"], model_data["tokenizer"], mode="mmlu")
-    answers_ent = process_dataset(datasets["ent_ds"], model_data["model"], model_data["tokenizer"], mode="ent")
+    answers_mmlu = process_dataset(
+        datasets["mmlu_like_ds"],
+        model_data["model"],
+        model_data["tokenizer"],
+        mode="mmlu",
+        apply_chat_template=apply_chat_template
+    )
+    answers_ent = process_dataset(
+        datasets["ent_ds"], model_data["model"], model_data["tokenizer"], mode="ent"
+    )
 
     save_results(answers_mmlu, answers_ent, model_id, output_path)
 
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Compute predictions for MMLU-like and ENT-like datasets.")
-    parser.add_argument("--model_id", type=str, required=True, help="Hugging Face model ID to use for predictions.")
-    parser.add_argument("--output_path", type=str, required=True, help="Directory to save output CSV files.")
+    parser = argparse.ArgumentParser(
+        description="Compute predictions for MMLU-like and ENT-like datasets."
+    )
+    parser.add_argument(
+        "--model_id",
+        type=str,
+        required=True,
+        help="Hugging Face model ID to use for predictions.",
+    )
+    parser.add_argument(
+        "--output_path",
+        type=str,
+        required=True,
+        help="Directory to save output CSV files.",
+    )
+    parser.add_argument(
+    "--dtype",
+    type=str,
+    default="float32",  
+    choices=["float16", "bfloat16", "float32"],
+    help="Data type for model weights: float16, bfloat16, or float32 (default: float16)."
+    )
+    parser.add_argument(
+        "--apply_chat_template",
+        action="store_true",
+        help="Flag to use chat template formatting for instruct models."
+    )
     args = parser.parse_args()
 
-    main(model_id=args.model_id, output_path=args.output_path)
+    main(model_id=args.model_id,
+          output_path=args.output_path,
+            dtype=args.dtype, 
+             apply_chat_template =args.apply_chat_template )
+

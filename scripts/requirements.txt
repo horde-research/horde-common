@@ -6,3 +6,4 @@ langchain
 einops
 datasets
 sentencepiece
+python-dotenv
