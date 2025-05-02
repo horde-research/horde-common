@@ -38,15 +38,13 @@ def inference_open_ai(
         max_tokens=256,
     )
 
-    assistant_reply: str = response.choices[0].message.content.strip()
-    print("GPT-4 reply:", assistant_reply)
+    assistant_reply = response.choices[0].message.content.strip()
 
-    # Robust JSON extraction (handles code blocks or extra text).
     json_match = re.search(r"\{.*\}", assistant_reply, re.DOTALL)
     if json_match:
         try:
             return json.loads(json_match.group())
         except json.JSONDecodeError:
-            pass  # fall through and return raw text if malformed
+            pass 
 
     return assistant_reply
