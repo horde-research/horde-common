@@ -83,7 +83,7 @@ def load_mc_dataset() -> Dataset:
             )
         }
     ds = raw_ds.map(build_text)
-    ds = ds.select(range(10))  # for testing
+    #ds = ds.select(range(10))  # for testing
     print(ds["text"][0])
     ds = ds.rename_column("formatted_answer", "answer")
     ds = ds.add_column("idx", [f"{i}" for i in range(len(ds))])
@@ -175,11 +175,24 @@ def save_final_json(df: pd.DataFrame, model_name: str, org_name: str, out_dir: s
     }
 
     os.makedirs(out_dir, exist_ok=True)
-    file_name = model_name.replace("/", "__") + ".json"
-    with open(os.path.join(out_dir, file_name), "w", encoding="utf-8") as f:
+
+    base_name   = model_name.replace("/", "__") + ".json"   # e.g. llama__70B.json
+    candidate   = os.path.join(out_dir, base_name)
+
+    if os.path.exists(candidate):
+        i = 1
+        # try filename.json(1), filename.json(2), …
+        while True:
+            alt = os.path.join(out_dir, f"{base_name.replace(".json", "")}({i})" + ".json")
+            if not os.path.exists(alt):
+                candidate = alt
+                break
+            i += 1
+
+    with open(candidate, "w", encoding="utf-8") as f:
         json.dump(final_json, f, ensure_ascii=False, indent=2)
 
-    print(f"\nSaved ⇒ {os.path.join(out_dir, file_name)}")
+    print(f"\nSaved ⇒ {candidate}")
 
 
 
