@@ -7,3 +7,4 @@ einops
 datasets
 sentencepiece
 python-dotenv
+google-generativeai

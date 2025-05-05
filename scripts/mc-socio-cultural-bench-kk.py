@@ -90,7 +90,7 @@ def load_mc_dataset() -> Dataset:
     return ds
 
 
-def load_model_and_tokenizer(model_id: str, dtype: str = "float16"):
+def load_model_and_tokenizer(model_id: str, dtype: str = "bfloat16"):
     dtype_map = {
         "float16": torch.float16,
         "bfloat16": torch.bfloat16,
@@ -131,19 +131,27 @@ def predict_option(model, tokenizer, prompt: str, apply_chat_template: bool = Fa
 
 def run_eval(ds: Dataset, model, tokenizer, apply_chat_template: bool = False) -> pd.DataFrame:
     rows = []
+    #ds = ds.select(range(10))  # for testing
     for ex in tqdm(ds, total=len(ds)):
         pred = predict_option(model, tokenizer, ex["text"], apply_chat_template)
         rows.append(
             {
+                "question": ex["question"],
+                "A": ex["A"],
+                "B": ex["B"],
+                "C": ex["C"],
+                "D": ex["D"],
                 "idx": ex["idx"],
                 "category": ex["category"],
                 "subcategory": ex["subcategory"],
                 "answer": ex["answer"].strip(),  # ensure no whitespace
                 "predict": pred,
+
             }
         )
     df = pd.DataFrame(rows)
     df["correct"] = (df["answer"] == df["predict"]).astype(int)
+    df.to_csv(f"predictions-{model.config._name_or_path.replace("/","-")}.csv", index=False)
     return df
 
 def save_final_json(df: pd.DataFrame, model_name: str, org_name: str, out_dir: str):
