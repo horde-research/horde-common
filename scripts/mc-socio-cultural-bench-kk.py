@@ -71,7 +71,10 @@ prompt_4 = PromptTemplate(
 
 def load_mc_dataset() -> Dataset:
     """Returns HF Dataset with .text, .answer, .category, .subcategory, .idx"""
-    raw_ds = load_dataset("kz-transformers/kk-socio-cultural-bench-mc", split="train")
+    #raw_ds = load_dataset("kz-transformers/kk-socio-cultural-bench-mc", split="train")
+    raw_ds = pd.read_csv("/home/BSagyndyk/horde-common/new_prompt_bench.csv")
+    # to Dataset
+    raw_ds = Dataset.from_pandas(raw_ds)
     def build_text(ex: Dict[str, Any]) -> Dict[str, str]:
         return {
             "text": prompt_4.format(
@@ -85,7 +88,7 @@ def load_mc_dataset() -> Dataset:
     ds = raw_ds.map(build_text)
     #ds = ds.select(range(10))  # for testing
     print(ds["text"][0])
-    ds = ds.rename_column("formatted_answer", "answer")
+    #ds = ds.rename_column("formatted_answer", "answer")
     ds = ds.add_column("idx", [f"{i}" for i in range(len(ds))])
     return ds
 
