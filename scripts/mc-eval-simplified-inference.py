@@ -24,9 +24,17 @@ from tqdm import tqdm
 import json
 from dotenv import load_dotenv
 import torch
-from huggingface_hub.hf_api import HfFolder
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
-from langchain.prompts import PromptTemplate
+
+try:  # huggingface_hub >= 1.0 (pulled in by transformers 5.x) removed HfFolder
+    from huggingface_hub.hf_api import HfFolder
+except ImportError:  # pragma: no cover - huggingface_hub >= 1.0
+    HfFolder = None
+
+try:  # langchain >= 1.0 moved PromptTemplate out of the `langchain.prompts` shim
+    from langchain.prompts import PromptTemplate
+except ImportError:  # pragma: no cover - langchain >= 1.0
+    from langchain_core.prompts import PromptTemplate
 
 try:  # available in transformers >= 4.46, required for multimodal checkpoints
     from transformers import AutoModelForImageTextToText
@@ -35,7 +43,11 @@ except ImportError:  # pragma: no cover - older transformers
 
 load_dotenv()
 if "HUGGINGFACE_TOKEN" in os.environ:
-    HfFolder.save_token(os.environ["HUGGINGFACE_TOKEN"])
+    if HfFolder is not None:
+        HfFolder.save_token(os.environ["HUGGINGFACE_TOKEN"])
+    else:
+        # huggingface_hub >= 1.0 resolves credentials from HF_TOKEN (see utils/_auth.py).
+        os.environ.setdefault("HF_TOKEN", os.environ["HUGGINGFACE_TOKEN"])
 
 with open("format_file.json", "r") as f:
     original_submit = json.load(f)
