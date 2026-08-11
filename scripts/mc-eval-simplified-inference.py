@@ -13,7 +13,9 @@ Future iterations should consider revisiting the choice alignment between templa
 """
 
 import argparse
+import inspect
 import os
+import warnings
 from typing import Dict, Any
 
 import pandas as pd
@@ -23,8 +25,13 @@ import json
 from dotenv import load_dotenv
 import torch
 from huggingface_hub.hf_api import HfFolder
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from langchain.prompts import PromptTemplate
+
+try:  # available in transformers >= 4.46, required for multimodal checkpoints
+    from transformers import AutoModelForImageTextToText
+except ImportError:  # pragma: no cover - older transformers
+    AutoModelForImageTextToText = None
 
 load_dotenv()
 if "HUGGINGFACE_TOKEN" in os.environ:
@@ -175,7 +182,8 @@ def load_model_and_tokenizer(model_id: str, dtype: str = "float16") -> Dict[str,
         Dict[str, Any]: Dictionary containing the model and tokenizer.
     """
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    tokenizer.pad_token = tokenizer.eos_token
+    if getattr(tokenizer, "pad_token", None) is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
     dtype_map = {
         "float16": torch.float16,
@@ -183,18 +191,76 @@ def load_model_and_tokenizer(model_id: str, dtype: str = "float16") -> Dict[str,
         "float32": torch.float32
     }
 
-    model = AutoModelForCausalLM.from_pretrained(
+    # Checkpoints trained in bfloat16 (e.g. meta-models/Muse-Glimmer-30B, which also
+    # applies logit softcapping and attention scale factors) can overflow to NaN when
+    # forced into float16. Warn loudly instead of silently producing garbage accuracy.
+    config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+    native_dtype = getattr(config, "dtype", None) or getattr(config, "torch_dtype", None)
+    if dtype == "float16" and str(native_dtype).endswith("bfloat16"):
+        warnings.warn(
+            f"{model_id} declares bfloat16 weights but --dtype float16 was requested. "
+            "This risks overflow/NaN logits; prefer --dtype bfloat16 (same speed and "
+            "memory on A100/H100).",
+            RuntimeWarning,
+        )
+
+    model = _from_pretrained_any_head(
         model_id,
         device_map="auto",
         trust_remote_code=True,
-        torch_dtype=dtype_map[dtype]
+        torch_dtype=dtype_map[dtype],
     )
     model.eval()
 
-    return {"model": model, "tokenizer": tokenizer}
+    # Passing logits_to_keep=1 makes the lm_head project only the final position instead
+    # of the whole sequence. On large-vocabulary models this is a large speed/memory win,
+    # but the kwarg does not exist on every architecture, so probe for it once.
+    supports_logits_to_keep = "logits_to_keep" in inspect.signature(model.forward).parameters
+
+    return {
+        "model": model,
+        "tokenizer": tokenizer,
+        "supports_logits_to_keep": supports_logits_to_keep,
+    }
 
 
-def get_ans(model: Any, tokenizer: Any, text: str, mode: str = "mmlu", apply_chat_template: bool = False) -> tuple:
+def _from_pretrained_any_head(model_id: str, **kwargs: Any) -> Any:
+    """
+    Load a checkpoint with the causal-LM head, falling back to the image-text-to-text head.
+
+    Multimodal checkpoints such as `meta-models/Muse-Glimmer-30B`
+    (`MuseGlimmerForConditionalGeneration`) are registered only in
+    `MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING`, so `AutoModelForCausalLM` raises `ValueError`
+    on them. Their text-only forward pass is identical -- `pixel_values` is optional --
+    so the rest of this script works unchanged once the right auto class is used.
+
+    Args:
+        model_id (str): Hugging Face model ID.
+        **kwargs (Any): Forwarded to `from_pretrained`.
+
+    Returns:
+        Any: The loaded model.
+    """
+    try:
+        return AutoModelForCausalLM.from_pretrained(model_id, **kwargs)
+    except ValueError:
+        if AutoModelForImageTextToText is None:
+            raise
+        print(
+            f"{model_id} is not a causal-LM checkpoint; "
+            "retrying with AutoModelForImageTextToText (text-only inference)."
+        )
+        return AutoModelForImageTextToText.from_pretrained(model_id, **kwargs)
+
+
+def get_ans(
+    model: Any,
+    tokenizer: Any,
+    text: str,
+    mode: str = "mmlu",
+    apply_chat_template: bool = False,
+    supports_logits_to_keep: bool = False,
+) -> tuple:
     """
     Generate an answer for the given text.
 
@@ -203,6 +269,7 @@ def get_ans(model: Any, tokenizer: Any, text: str, mode: str = "mmlu", apply_cha
         tokenizer (Any): Tokenizer for the model.
         text (str): Input text.
         mode (str): Dataset mode, either "mmlu" or "ent".
+        supports_logits_to_keep (bool): Whether `model.forward` accepts `logits_to_keep`.
 
     Returns:
         tuple: Predicted answer.
@@ -222,6 +289,9 @@ def get_ans(model: Any, tokenizer: Any, text: str, mode: str = "mmlu", apply_cha
     else:
         inputs = tokenizer(text, return_tensors="pt")
         inputs = {k: v.cuda() for k, v in inputs.items()}
+
+    if supports_logits_to_keep:
+        inputs["logits_to_keep"] = 1
 
     with torch.no_grad():
         logits = model(**inputs).logits[0, -1]
@@ -245,7 +315,12 @@ def get_ans(model: Any, tokenizer: Any, text: str, mode: str = "mmlu", apply_cha
 
 
 def process_dataset(
-    dataset: Dataset, model: Any, tokenizer: Any, mode: str, apply_chat_template: bool = False
+    dataset: Dataset,
+    model: Any,
+    tokenizer: Any,
+    mode: str,
+    apply_chat_template: bool = False,
+    supports_logits_to_keep: bool = False,
 ) -> pd.DataFrame:
     """
     Process a dataset to compute predictions and accuracy.
@@ -255,13 +330,21 @@ def process_dataset(
         model (Any): Hugging Face model.
         tokenizer (Any): Tokenizer for the model.
         mode (str): Dataset mode, either "mmlu" or "ent".
+        supports_logits_to_keep (bool): Whether `model.forward` accepts `logits_to_keep`.
 
     Returns:
         pd.DataFrame: DataFrame with predictions and accuracy.
     """
     results = []
     for data in tqdm(dataset, total=len(dataset)):
-        ans_list = get_ans(model, tokenizer, data["text"], mode=mode, apply_chat_template=apply_chat_template)
+        ans_list = get_ans(
+            model,
+            tokenizer,
+            data["text"],
+            mode=mode,
+            apply_chat_template=apply_chat_template,
+            supports_logits_to_keep=supports_logits_to_keep,
+        )
         predict = ans_list[1]
         answer = data["answer"]
         acc = int(predict == answer)
@@ -339,10 +422,16 @@ def main(model_id: str, output_path: str, dtype: str, apply_chat_template: bool 
         model_data["model"],
         model_data["tokenizer"],
         mode="mmlu",
-        apply_chat_template=apply_chat_template
+        apply_chat_template=apply_chat_template,
+        supports_logits_to_keep=model_data["supports_logits_to_keep"],
     )
     answers_ent = process_dataset(
-        datasets["ent_ds"], model_data["model"], model_data["tokenizer"], mode="ent"
+        datasets["ent_ds"],
+        model_data["model"],
+        model_data["tokenizer"],
+        mode="ent",
+        apply_chat_template=apply_chat_template,
+        supports_logits_to_keep=model_data["supports_logits_to_keep"],
     )
 
     save_results(answers_mmlu, answers_ent, model_id, output_path)
