@@ -24,6 +24,7 @@ from tqdm import tqdm
 import json
 from dotenv import load_dotenv
 import torch
+import transformers
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 try:  # huggingface_hub >= 1.0 (pulled in by transformers 5.x) removed HfFolder
@@ -207,7 +208,7 @@ def load_model_and_tokenizer(model_id: str, dtype: str = "float16") -> Dict[str,
     # applies logit softcapping and attention scale factors) can overflow to NaN when
     # forced into float16. Warn loudly instead of silently producing garbage accuracy.
     config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
-    native_dtype = getattr(config, "dtype", None) or getattr(config, "torch_dtype", None)
+    native_dtype = _declared_dtype(config)
     if dtype == "float16" and str(native_dtype).endswith("bfloat16"):
         warnings.warn(
             f"{model_id} declares bfloat16 weights but --dtype float16 was requested. "
@@ -218,6 +219,7 @@ def load_model_and_tokenizer(model_id: str, dtype: str = "float16") -> Dict[str,
 
     model = _from_pretrained_any_head(
         model_id,
+        config,
         device_map="auto",
         trust_remote_code=True,
         torch_dtype=dtype_map[dtype],
@@ -236,23 +238,58 @@ def load_model_and_tokenizer(model_id: str, dtype: str = "float16") -> Dict[str,
     }
 
 
-def _from_pretrained_any_head(model_id: str, **kwargs: Any) -> Any:
+def _declared_dtype(config: Any) -> Any:
     """
-    Load a checkpoint with the causal-LM head, falling back to the image-text-to-text head.
+    Return the dtype a checkpoint declares, looking inside `text_config` for multimodal ones.
 
-    Multimodal checkpoints such as `meta-models/Muse-Glimmer-30B`
-    (`MuseGlimmerForConditionalGeneration`) are registered only in
-    `MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING`, so `AutoModelForCausalLM` raises `ValueError`
-    on them. Their text-only forward pass is identical -- `pixel_values` is optional --
-    so the rest of this script works unchanged once the right auto class is used.
+    Multimodal configs (e.g. Qwen/Qwen3.6-27B) carry no top-level dtype; theirs lives in
+    the nested `text_config`.
+
+    Args:
+        config (Any): A loaded `PretrainedConfig`.
+
+    Returns:
+        Any: The declared dtype, or None.
+    """
+    for candidate in (config, getattr(config, "text_config", None)):
+        if candidate is None:
+            continue
+        dtype = getattr(candidate, "dtype", None) or getattr(candidate, "torch_dtype", None)
+        if dtype is not None:
+            return dtype
+    return None
+
+
+def _from_pretrained_any_head(model_id: str, config: Any, **kwargs: Any) -> Any:
+    """
+    Load a checkpoint using the head class the checkpoint itself declares.
+
+    Model-specific branching is deliberately avoided: `config.architectures` already names
+    the exact class the weights were saved from, so honouring it generalises to every new
+    model without a code change. This matters for multimodal checkpoints, where the auto
+    classes disagree -- `qwen3_5`, for instance, maps to `Qwen3_5ForCausalLM` (the text
+    tower only) under `AutoModelForCausalLM` but to `Qwen3_5ForConditionalGeneration`
+    under `AutoModelForImageTextToText`, while the checkpoint declares the latter. Loading
+    the wrong one risks silently mismatched weight prefixes.
+
+    Falls back to the auto classes when the declared class is not importable, e.g. for
+    `trust_remote_code` checkpoints. Text-only inference works either way, since
+    `pixel_values` is optional on every conditional-generation forward pass.
 
     Args:
         model_id (str): Hugging Face model ID.
+        config (Any): The checkpoint's loaded config.
         **kwargs (Any): Forwarded to `from_pretrained`.
 
     Returns:
         Any: The loaded model.
     """
+    declared = (getattr(config, "architectures", None) or [None])[0]
+    model_cls = getattr(transformers, declared, None) if declared else None
+    if model_cls is not None:
+        print(f"Loading {model_id} as {declared} (declared by the checkpoint).")
+        return model_cls.from_pretrained(model_id, **kwargs)
+
     try:
         return AutoModelForCausalLM.from_pretrained(model_id, **kwargs)
     except ValueError:
